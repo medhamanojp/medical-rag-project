@@ -1,0 +1,30 @@
+# Core agentic framework
+crewai>=0.80.0
+crewai-tools>=0.17.0
+
+# LLM backend
+anthropic>=0.40.0
+langchain-anthropic>=0.3.0
+
+# ML + Explainability
+scikit-learn>=1.5.0
+shap>=0.46.0
+numpy>=1.26.0
+pandas>=2.2.0
+xgboost>=2.1.0
+joblib>=1.4.0
+
+# Data validation / guardrails
+pydantic>=2.9.0
+
+# RAG pipeline
+datasets>=2.21.0           # HuggingFace datasets (MedQuAD)
+sentence-transformers>=3.1.0  # Embedding model (all-MiniLM-L6-v2)
+faiss-cpu>=1.8.0           # Vector similarity search index
+
+# Streamlit UI
+streamlit>=1.39.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.9.0
