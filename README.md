@@ -52,9 +52,12 @@ Patient Symptoms
 
 ### ML Model
 
-- **Algorithm**: RandomForestClassifier (200 trees, depth 12)
-- **Training data**: `kamruzzaman-asif/Diseases_Dataset` (HuggingFace) — real disease-symptom mappings
-- **Features**: Binary symptom flags — discovered dynamically from the dataset (no hardcoded list)
+- **Algorithm**: RandomForestClassifier (200 trees, depth 15)
+- **Training data**: DDXPlus — `mila-iqia/ddxplus` (HuggingFace)
+  - Published at NeurIPS 2022 by Fansi Tchango et al. (Mila / McGill University)
+  - 1.3 million patient cases, 49 disease classes, 223 evidence codes
+  - Trains on a 50k random sample by default (adjustable via `SAMPLE_SIZE`)
+- **Features**: Binary evidence tokens — discovered dynamically from the dataset
 - **Explainability**: SHAP TreeExplainer (exact, not approximate)
 - **Output**: Top-3 disease predictions with confidence scores
 
@@ -172,9 +175,11 @@ medical-rag-project/
 
 ## Dataset
 
-**Disease-Symptom data**: [`kamruzzaman-asif/Diseases_Dataset`](https://huggingface.co/datasets/kamruzzaman-asif/Diseases_Dataset)
-- Real disease-symptom mappings combining multiple public medical sources
-- Disease classes and symptom features are loaded directly from the dataset — nothing hardcoded
+**Disease-Symptom data**: [`mila-iqia/ddxplus`](https://huggingface.co/datasets/mila-iqia/ddxplus)
+- Published at **NeurIPS 2022** — "DDXPlus: A New English Clinical Cases Dataset For Automatic Medical Diagnosis" by Fansi Tchango et al. (Mila / McGill University)
+- 1.3 million patient cases, 49 disease classes, 223 evidence codes
+- Evidence codes mapped to human-readable names via `release_evidences.json`
+- Trains on a 50,000 row sample by default (set `SAMPLE_SIZE` in `disease_classifier.py`)
 
 **Medical knowledge base**: MedQuAD
 - ~16,000 Q&A pairs sourced from NIH/NLM medical resources

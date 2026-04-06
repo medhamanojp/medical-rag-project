@@ -13,8 +13,9 @@ numpy>=1.26.0
 pandas>=2.2.0
 joblib>=1.4.0
 
-# Real disease dataset (HuggingFace)
+# DDXPlus dataset + HuggingFace tooling
 datasets>=2.21.0
+huggingface-hub>=0.24.0
 
 # Data validation / guardrails
 pydantic>=2.9.0

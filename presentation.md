@@ -71,24 +71,34 @@ This prevents any single prompt from doing too much, which leads to worse output
 
 ---
 
-## Slide 4 — The Real Dataset
+## Slide 4 — The Real Dataset: DDXPlus
 
-**`kamruzzaman-asif/Diseases_Dataset`** (HuggingFace)
+**`mila-iqia/ddxplus`** — published at NeurIPS 2022
 
-- Real disease-symptom mappings from multiple public medical sources
-- Covers common diseases: flu, migraine, UTI, allergy, diabetes, gastroenteritis, etc.
-- **Nothing is hardcoded** — disease classes and symptom features are discovered directly from the data
+> Fansi Tchango, Rishab Goel, Zhi Wen, Julien Martel, Joumana Ghosn
+> *"DDXPlus: A New English Clinical Cases Dataset For Automatic Medical Diagnosis"*
+> NeurIPS 2022 — Mila / McGill University
+
+| Property | Value |
+|----------|-------|
+| Patient cases | 1.3 million |
+| Disease classes | 49 |
+| Evidence codes | 223 symptoms/antecedents |
+| Evidence types | Binary, categorical, multi-choice |
+| License | Public research use |
 
 ```python
-# At training time, the code reads whatever diseases + symptoms exist:
-all_symptoms = sorted({sym for syms in df["symptom_list"] for sym in syms})
-# → ["abdominal_pain", "back_pain", "blurred_vision", "cough", ...]
+# Evidence column looks like this per patient:
+"['E_1', 'E_10', 'E_45_@_V_3', 'E_67']"
+#   ↑ binary       ↑ categorical (evidence 45, value 3)
 
-disease_classes = df["disease"].unique()
-# → ["Common Cold", "Diabetes", "Flu", "Migraine", "UTI", ...]
+# At training time, every unique token becomes a binary feature:
+all_tokens → ["E_1", "E_10", "E_45_@_V_3", ...] → 223+ columns
+# Mapped to readable names via release_evidences.json:
+# E_1 → "chest_pain", E_10 → "cough", etc.
 ```
 
-If the dataset is updated with new diseases tomorrow, the model learns them automatically.
+**Why this matters for your presentation**: This is not a random Kaggle upload. It is a peer-reviewed, published, large-scale clinical dataset from a top ML research institution.
 
 ---
 
@@ -223,7 +233,7 @@ In Streamlit:
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Dataset | `kamruzzaman-asif/Diseases_Dataset` | Real disease-symptom training data |
+| Dataset | DDXPlus `mila-iqia/ddxplus` (NeurIPS 2022) | 1.3M patient cases, 49 diseases |
 | ML Model | scikit-learn RandomForestClassifier | Calibrated probability predictions |
 | Explainability | SHAP TreeExplainer | Exact feature attribution |
 | Agent Framework | CrewAI | Sequential multi-agent orchestration |
