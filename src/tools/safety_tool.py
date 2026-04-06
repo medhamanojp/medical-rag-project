@@ -1,64 +1,35 @@
 """
-CrewAI tool: SafetyCheckTool
-Applies the output guardrail to a prediction result and returns a
-structured safety assessment including risk level and escalation flags.
+SafetyCheckTool — CrewAI tool that runs the output guardrail.
+Called by the SafetyOfficerAgent to assess risk and escalation need.
 """
 
 import json
-import logging
-from typing import Any
-
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
-
-from src.guardrails.medical_guardrails import (
-    InputGuardrail,
-    OutputGuardrail,
-    PatientInput,
-)
-
-logger = logging.getLogger(__name__)
-
-_input_guardrail = InputGuardrail()
-_output_guardrail = OutputGuardrail()
+from src.guardrails.medical_guardrails import validate_output
 
 
-class SafetyCheckInput(BaseModel):
-    prediction: dict[str, Any] = Field(
+class SafetyInput(BaseModel):
+    prediction: dict = Field(
         ...,
-        description=(
-            "The raw prediction dict returned by DiagnosisTool "
-            "(keys: primary_diagnosis, confidence, top_predictions)."
-        ),
+        description="The prediction dict returned by DiagnosisTool."
     )
-    patient_data: dict[str, Any] = Field(
-        ...,
-        description="The same patient_data dict used in DiagnosisTool.",
+    age: int | None = Field(
+        default=None,
+        description="Patient age (optional). Used to elevate risk for elderly patients."
     )
 
 
 class SafetyCheckTool(BaseTool):
     name: str = "SafetyCheckTool"
     description: str = (
-        "Applies clinical safety guardrails to a diagnosis prediction. "
-        "Evaluates confidence thresholds, high-risk disease flags, patient "
-        "age risk, and vital sign alerts. "
-        "Returns a risk_level (low/moderate/high/critical), "
-        "requires_escalation flag, escalation_reasons, and a mandatory "
-        "medical disclaimer."
+        "Runs safety guardrails on a disease prediction. "
+        "Checks confidence level, disease risk, and patient age. "
+        "Returns risk level (low/moderate/high/critical), escalation flag, "
+        "and a mandatory clinical disclaimer."
     )
-    args_schema: type[BaseModel] = SafetyCheckInput
+    args_schema: type[BaseModel] = SafetyInput
 
-    def _run(self, prediction: dict[str, Any], patient_data: dict[str, Any]) -> str:
-        logger.info("SafetyCheckTool called for diagnosis: %s", prediction.get("primary_diagnosis"))
-        try:
-            # Re-validate patient to get typed object for the output guardrail
-            patient: PatientInput = _input_guardrail.validate(patient_data)
-            output = _output_guardrail.validate(prediction, patient)
-        except Exception as e:
-            logger.exception("Safety check failed")
-            return json.dumps({"error": "SAFETY_CHECK_FAILED", "detail": str(e)})
-
-        result = output.model_dump()
-        result["risk_level"] = output.risk_level.value  # serialize enum
+    def _run(self, prediction: dict, age: int | None = None) -> str:
+        result = validate_output(prediction, age=age)
         return json.dumps(result, indent=2)

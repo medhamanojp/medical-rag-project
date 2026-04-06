@@ -1,162 +1,151 @@
 """
-MedicalDiagnosisCrew — assembles the three-agent CrewAI pipeline.
+Crew assembly — wires the three agents into a sequential pipeline.
 
-Pipeline (sequential):
-  1. DiagnosticianAgent  → runs DiagnosisTool → top-3 predictions
-  2. ExplainerAgent      → runs SHAPExplainerTool → clinical narrative
-  3. SafetyOfficerAgent  → runs SafetyCheckTool → risk level + escalation
+Flow:
+  1. DiagnosticianAgent  →  runs ML classifier, produces differential diagnosis
+  2. ExplainerAgent      →  explains SHAP attributions in plain language
+  3. SafetyOfficerAgent  →  checks safety, sets risk level, appends disclaimer
 
-The final task output is a complete, safety-endorsed clinical report
-ready to be reviewed by the treating physician.
+Each task feeds its output into the context of the next task.
 """
 
-import json
-import logging
-import os
-from typing import Any
-
-from crewai import Crew, Process, Task
+from crewai import Crew, Task, Process
 from langchain_anthropic import ChatAnthropic
 
-from src.agents.diagnosis_agent import create_diagnostician
-from src.agents.explainability_agent import create_explainer
-from src.agents.safety_agent import create_safety_officer
+from src.agents.diagnosis_agent import build_diagnosis_agent
+from src.agents.explainability_agent import build_explainer_agent
+from src.agents.safety_agent import build_safety_agent
+from src.guardrails.medical_guardrails import validate_input
 
-logger = logging.getLogger(__name__)
 
-
-def _build_llm() -> ChatAnthropic:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError(
-            "ANTHROPIC_API_KEY is not set. "
-            "Add it to your .env file or export it in your shell."
-        )
+def build_llm(api_key: str) -> ChatAnthropic:
     return ChatAnthropic(
         model="claude-sonnet-4-6",
         anthropic_api_key=api_key,
-        temperature=0.1,   # low temperature → more deterministic clinical reasoning
-        max_tokens=4096,
+        temperature=0.2,   # low temperature = more consistent clinical reasoning
     )
 
 
-class MedicalDiagnosisCrew:
+def run_pipeline(symptoms: dict[str, int], age: int | None, api_key: str) -> dict:
     """
-    Orchestrates the full diagnosis pipeline for a single patient case.
+    Run the full diagnostic pipeline for a patient.
 
-    Usage:
-        crew = MedicalDiagnosisCrew()
-        report = crew.run(patient_data)
+    Args:
+        symptoms:  dict of symptom_name -> 0 or 1
+        age:       patient age (optional)
+        api_key:   Anthropic API key
+
+    Returns:
+        {
+          "status":  "ok" | "emergency" | "error",
+          "report":  str   (full markdown clinical report),
+          "error":   str | None,
+        }
     """
 
-    def __init__(self, rag_context: str = ""):
-        self.llm = _build_llm()
-        self.rag_context = rag_context
-        self.diagnostician = create_diagnostician(self.llm)
-        self.explainer = create_explainer(self.llm)
-        self.safety_officer = create_safety_officer(self.llm)
+    # ------------------------------------------------------------------
+    # 1. Input guardrail — check before anything else
+    # ------------------------------------------------------------------
+    guard = validate_input(symptoms, age=age)
 
-    def run(self, patient_data: dict[str, Any]) -> str:
-        """
-        Run the full pipeline for a patient case.
-
-        Args:
-            patient_data: flat dict with vitals + binary symptom flags.
-
-        Returns:
-            A comprehensive clinical report string.
-        """
-        patient_json = json.dumps(patient_data, indent=2)
-        logger.info("Starting MedicalDiagnosisCrew for patient data: %s", patient_json)
-
-        # ------------------------------------------------------------------
-        # Task 1: Diagnosis
-        # ------------------------------------------------------------------
-        rag_section = (
-            f"\n\nAdditional medical evidence retrieved from MedQuAD:\n{self.rag_context}"
-            if self.rag_context else
-            "\n\nYou may also use the MedicalRAGTool to retrieve supporting evidence."
-        )
-
-        task_diagnose = Task(
-            description=(
-                f"A patient presents with the following data:\n\n{patient_json}\n\n"
-                "Use the DiagnosisTool with the exact patient_data dict above to "
-                "get the top-3 disease predictions. Then present the results as a "
-                "clear differential diagnosis list, noting each disease and its "
-                "probability. If an emergency guardrail fires, report it immediately "
-                "and do not proceed further."
-                f"{rag_section}"
+    if guard["emergency"]:
+        return {
+            "status": "emergency",
+            "report": (
+                f"## EMERGENCY\n\n{guard['emergency_reason']}\n\n"
+                "**Call emergency services immediately. Do not wait.**"
             ),
-            expected_output=(
-                "A ranked differential diagnosis list with the top-3 most probable "
-                "diseases and their probabilities. Flag any emergency guardrail errors."
-            ),
-            agent=self.diagnostician,
-        )
+            "error": guard["emergency_reason"],
+        }
 
-        # ------------------------------------------------------------------
-        # Task 2: Explanation (depends on Task 1 output)
-        # ------------------------------------------------------------------
-        task_explain = Task(
-            description=(
-                f"Given the diagnosis from the previous step for the patient data:\n\n"
-                f"{patient_json}\n\n"
-                "Use the SHAPExplainerTool with the exact same patient_data dict to "
-                "retrieve the SHAP feature contributions for the primary diagnosis. "
-                "Then write a clear clinical narrative (3-5 sentences) explaining:\n"
-                "  - Which patient findings most strongly drove the prediction\n"
-                "  - Whether those findings are clinically consistent with the diagnosis\n"
-                "  - Any surprising or counter-intuitive contributions that warrant scrutiny"
-            ),
-            expected_output=(
-                "A clinical explanation narrative identifying the key drivers of the "
-                "primary diagnosis with SHAP values interpreted in plain medical language."
-            ),
-            agent=self.explainer,
-            context=[task_diagnose],
-        )
+    if not guard["valid"]:
+        return {
+            "status": "error",
+            "report": None,
+            "error":  guard["error"],
+        }
 
-        # ------------------------------------------------------------------
-        # Task 3: Safety Check (depends on Tasks 1 & 2)
-        # ------------------------------------------------------------------
-        task_safety = Task(
-            description=(
-                f"Given the diagnosis and explanation from the previous steps, "
-                f"perform a safety assessment for the patient:\n\n{patient_json}\n\n"
-                "Use the SafetyCheckTool with:\n"
-                "  - prediction: the JSON prediction result from Task 1 "
-                "(must include primary_diagnosis, confidence, top_predictions)\n"
-                "  - patient_data: the exact patient_data dict above\n\n"
-                "Then produce the final clinical report in the following structure:\n\n"
-                "## Clinical Decision Support Report\n"
-                "### 1. Differential Diagnosis\n"
-                "### 2. Model Reasoning (SHAP)\n"
-                "### 3. Safety Assessment\n"
-                "   - Risk Level\n"
-                "   - Escalation Required: Yes/No\n"
-                "   - Escalation Reasons (if any)\n"
-                "### 4. Recommended Next Steps\n"
-                "### 5. Disclaimer\n"
-            ),
-            expected_output=(
-                "A complete, structured clinical decision support report with "
-                "risk level, escalation recommendation, next steps, and the "
-                "mandatory medical disclaimer."
-            ),
-            agent=self.safety_officer,
-            context=[task_diagnose, task_explain],
-        )
+    # ------------------------------------------------------------------
+    # 2. Build agents and LLM
+    # ------------------------------------------------------------------
+    llm = build_llm(api_key)
 
-        # ------------------------------------------------------------------
-        # Assemble and run the crew
-        # ------------------------------------------------------------------
-        crew = Crew(
-            agents=[self.diagnostician, self.explainer, self.safety_officer],
-            tasks=[task_diagnose, task_explain, task_safety],
-            process=Process.sequential,
-            verbose=True,
-        )
+    diagnosis_agent = build_diagnosis_agent(llm)
+    explainer_agent = build_explainer_agent(llm)
+    safety_agent    = build_safety_agent(llm)
 
-        result = crew.kickoff()
-        return str(result)
+    # Format symptoms for the task descriptions
+    active_symptoms = [s for s, v in symptoms.items() if v == 1]
+    symptom_str     = ", ".join(active_symptoms)
+    age_str         = f"Age: {age}" if age else "Age: not provided"
+
+    # ------------------------------------------------------------------
+    # 3. Define tasks
+    # ------------------------------------------------------------------
+    task_diagnose = Task(
+        description=(
+            f"Patient presents with the following symptoms: {symptom_str}. "
+            f"{age_str}. "
+            "Use the DiagnosisTool with this exact symptoms dict: "
+            f"{symptoms}. "
+            "Produce a clear differential diagnosis listing the top-3 "
+            "most likely diseases with their probabilities."
+        ),
+        expected_output=(
+            "A differential diagnosis with top-3 diseases, their probabilities, "
+            "and a brief clinical interpretation of the findings."
+        ),
+        agent=diagnosis_agent,
+    )
+
+    task_explain = Task(
+        description=(
+            "Using the diagnosis from the previous task, call the SHAPExplainerTool "
+            f"with this symptoms dict: {symptoms}. "
+            "Translate the SHAP feature attributions into a plain-language clinical "
+            "narrative explaining which symptoms most strongly drove the primary "
+            "diagnosis and which symptoms were less significant."
+        ),
+        expected_output=(
+            "A clear clinical narrative explaining the top contributing symptoms "
+            "to the primary diagnosis, written so both doctors and patients can "
+            "understand it."
+        ),
+        agent=explainer_agent,
+        context=[task_diagnose],
+    )
+
+    task_safety = Task(
+        description=(
+            "Review the diagnosis and explanation from the previous tasks. "
+            "Call the SafetyCheckTool with the prediction from the diagnosis task "
+            f"and age={age}. "
+            "Write the final clinical report including: risk level, whether "
+            "escalation to a human clinician is required, the reasons why, "
+            "and the mandatory clinical disclaimer."
+        ),
+        expected_output=(
+            "A final clinical safety report with: risk level, escalation decision "
+            "with justification, any safety flags, and the clinical disclaimer."
+        ),
+        agent=safety_agent,
+        context=[task_diagnose, task_explain],
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Assemble and run crew
+    # ------------------------------------------------------------------
+    crew = Crew(
+        agents=[diagnosis_agent, explainer_agent, safety_agent],
+        tasks=[task_diagnose, task_explain, task_safety],
+        process=Process.sequential,   # each task waits for the previous one
+        verbose=True,
+    )
+
+    result = crew.kickoff()
+
+    return {
+        "status": "ok",
+        "report": str(result),
+        "error":  None,
+    }

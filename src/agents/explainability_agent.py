@@ -1,38 +1,32 @@
 """
-ExplainabilityAgent — SHAP-based reasoning agent.
-
-Role: Medical AI Explainability Specialist.
-Goal: Translate SHAP feature contributions into plain clinical language
-      so the doctor understands *why* the model produced its diagnosis.
-Tools: SHAPExplainerTool
+ExplainerAgent — acts as a clinical AI informatics specialist.
+Translates raw SHAP values into a human-readable clinical narrative.
 """
 
 from crewai import Agent
-
 from src.tools.shap_tool import SHAPExplainerTool
 from src.tools.rag_tool import MedicalRAGTool
 
 
-def create_explainer(llm) -> Agent:
+def build_explainer_agent(llm) -> Agent:
     return Agent(
-        role="Medical AI Explainability Specialist",
+        role="Clinical AI Explainability Specialist",
         goal=(
-            "Use the SHAPExplainerTool to retrieve the feature contributions "
-            "behind the primary diagnosis, then use MedicalRAGTool to find "
-            "corroborating clinical evidence. Translate SHAP values into "
-            "a clear, evidence-backed clinical narrative the treating "
-            "physician can understand and audit."
+            "Explain in plain clinical language exactly which symptoms "
+            "drove the diagnosis and why, using SHAP feature attributions. "
+            "Make the reasoning transparent and understandable to both "
+            "doctors and patients."
         ),
         backstory=(
-            "You are a clinical informatics expert who bridges machine learning "
-            "and bedside medicine. You have deep knowledge of both SHAP "
-            "explainability methods and clinical physiology. You always explain "
-            "which patient findings most strongly influenced the model's decision, "
-            "cite supporting medical evidence from the knowledge base, and flag "
-            "any surprising or counter-intuitive SHAP contributions for human review."
+            "You specialise in clinical informatics and AI explainability. "
+            "Your job is to bridge the gap between machine learning outputs "
+            "and clinical understanding. You translate SHAP values into "
+            "clear narratives: which symptoms were most important, which "
+            "ruled things out, and what the model was most uncertain about. "
+            "You never use jargon without explanation."
         ),
         tools=[SHAPExplainerTool(), MedicalRAGTool()],
         llm=llm,
         verbose=True,
-        max_iter=5,
+        allow_delegation=False,
     )

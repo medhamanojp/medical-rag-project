@@ -1,194 +1,133 @@
 """
-RAG Pipeline — Medical knowledge retrieval using MedQuAD from HuggingFace.
+RAG pipeline — retrieves relevant medical knowledge for agent queries.
 
-Dataset: "lavita/medical-qa-datasets" (subset: "all-processed")
-         ~16k real medical Q&A pairs from NLM/NIH sources (MedQuAD).
+Knowledge base: MedQuAD (NIH/NLM medical Q&A dataset, ~16k pairs)
+Embeddings:     sentence-transformers/all-MiniLM-L6-v2
+Vector store:   FAISS (IndexFlatIP, cosine similarity)
+Cache:          .rag_cache/ — index built once, reused on subsequent runs
 
-Pipeline:
-  1. Load dataset from HuggingFace (cached after first download)
-  2. Embed questions+answers with sentence-transformers (all-MiniLM-L6-v2)
-  3. Build a FAISS index for fast nearest-neighbour retrieval
-  4. At query time, embed the query and return top-k most relevant passages
-
-The index is cached to disk so it only needs to be built once.
+Usage:
+    retriever = get_retriever()
+    results   = retriever.query("what causes migraines", top_k=3)
 """
 
-from __future__ import annotations
-
-import logging
+import os
 import pickle
-from pathlib import Path
-from typing import Any
-
 import numpy as np
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-_CACHE_DIR = Path(__file__).parent.parent.parent / ".rag_cache"
-_INDEX_PATH = _CACHE_DIR / "faiss.index"
-_DOCS_PATH = _CACHE_DIR / "docs.pkl"
-
-_CACHE_DIR.mkdir(exist_ok=True)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-HF_DATASET_NAME = "lavita/medical-qa-datasets"
-HF_DATASET_CONFIG = "all-processed"
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-MAX_DOCS = 8000   # cap to keep index fast; dataset has ~16k entries
+CACHE_DIR   = Path(".rag_cache")
+INDEX_PATH  = CACHE_DIR / "faiss.index"
+DOCS_PATH   = CACHE_DIR / "docs.pkl"
+DATASET_ID  = "keivalya/MedQuad-MedicalQnADataset"
 
 
 # ---------------------------------------------------------------------------
-# RAG pipeline class
+# Build index
 # ---------------------------------------------------------------------------
 
-
-class MedicalRAGPipeline:
+def _build_index():
     """
-    Retrieval-Augmented Generation pipeline over MedQuAD.
+    Load MedQuAD from HuggingFace, embed all Q&A pairs, build a FAISS
+    index, and cache everything to .rag_cache/.
+    """
+    import faiss
+    from datasets import load_dataset
+    from sentence_transformers import SentenceTransformer
 
-    Builds / loads a FAISS index of medical Q&A embeddings.
-    At query time returns the top-k most semantically similar documents.
+    print("Building RAG index from MedQuAD dataset...")
+    CACHE_DIR.mkdir(exist_ok=True)
+
+    print("  Loading dataset...")
+    ds  = load_dataset(DATASET_ID, split="train")
+    df  = ds.to_pandas()
+
+    # Normalise column names
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    q_col = _find_col(df, ["question", "q", "query"])
+    a_col = _find_col(df, ["answer", "a", "response"])
+
+    df     = df[[q_col, a_col]].dropna().reset_index(drop=True)
+    docs   = [
+        f"Q: {row[q_col]}\nA: {row[a_col]}"
+        for _, row in df.iterrows()
+    ]
+    print(f"  {len(docs)} Q&A pairs loaded.")
+
+    print("  Embedding documents (this takes a minute on first run)...")
+    model      = SentenceTransformer("all-MiniLM-L6-v2")
+    embeddings = model.encode(docs, batch_size=64, show_progress_bar=True,
+                              normalize_embeddings=True)
+    embeddings = np.array(embeddings, dtype="float32")
+
+    print("  Building FAISS index...")
+    index = faiss.IndexFlatIP(embeddings.shape[1])   # inner product = cosine (normalised)
+    index.add(embeddings)
+
+    # Save
+    faiss.write_index(index, str(INDEX_PATH))
+    with open(DOCS_PATH, "wb") as f:
+        pickle.dump(docs, f)
+
+    print(f"  RAG index cached to {CACHE_DIR}/")
+    return index, docs, model
+
+
+def _find_col(df, candidates: list[str]) -> str:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    raise KeyError(f"None of {candidates} found in {df.columns.tolist()}")
+
+
+# ---------------------------------------------------------------------------
+# Retriever class
+# ---------------------------------------------------------------------------
+
+class MedicalRetriever:
+    """
+    Loads the FAISS index from cache (or builds it on first run) and
+    provides semantic similarity search over MedQuAD Q&A pairs.
     """
 
     def __init__(self):
-        self._index = None
-        self._docs: list[dict[str, str]] = []
-        self._embedder = None
-        self._load_or_build()
+        import faiss
+        from sentence_transformers import SentenceTransformer
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        if INDEX_PATH.exists() and DOCS_PATH.exists():
+            print("Loading RAG index from cache...")
+            self.index = faiss.read_index(str(INDEX_PATH))
+            with open(DOCS_PATH, "rb") as f:
+                self.docs = pickle.load(f)
+        else:
+            self.index, self.docs, _ = _build_index()
 
-    def retrieve(self, query: str, k: int = 3) -> list[dict[str, str]]:
+        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    def query(self, text: str, top_k: int = 3) -> list[str]:
         """
-        Retrieve top-k documents most relevant to the query.
+        Return the top_k most relevant Q&A pairs for the given query.
+
+        Args:
+            text:  natural language clinical query
+            top_k: number of results to return
 
         Returns:
-            List of dicts with keys: question, answer, source (optional).
+            list of Q&A strings ranked by relevance
         """
-        if self._index is None or not self._docs:
-            logger.warning("RAG index not available — returning empty results")
-            return []
-
-        q_vec = self._embed([query])          # (1, dim)
-        distances, indices = self._index.search(q_vec, k)
-
-        results = []
-        for idx in indices[0]:
-            if 0 <= idx < len(self._docs):
-                results.append(self._docs[idx])
-        return results
-
-    # ------------------------------------------------------------------
-    # Index build / load
-    # ------------------------------------------------------------------
-
-    def _load_or_build(self) -> None:
-        if _INDEX_PATH.exists() and _DOCS_PATH.exists():
-            logger.info("Loading cached FAISS index from %s", _CACHE_DIR)
-            self._load_index()
-        else:
-            logger.info("Building FAISS index from HuggingFace dataset...")
-            self._build_index()
-
-    def _load_index(self) -> None:
-        import faiss
-        self._index = faiss.read_index(str(_INDEX_PATH))
-        with open(_DOCS_PATH, "rb") as f:
-            self._docs = pickle.load(f)
-        logger.info("Loaded %d documents from cache", len(self._docs))
-
-    def _build_index(self) -> None:
-        import faiss
-        from datasets import load_dataset
-
-        logger.info("Downloading %s / %s from HuggingFace...", HF_DATASET_NAME, HF_DATASET_CONFIG)
-        try:
-            ds = load_dataset(
-                HF_DATASET_NAME,
-                HF_DATASET_CONFIG,
-                split="train",
-                trust_remote_code=True,
-            )
-        except Exception as e:
-            logger.error("Failed to load HuggingFace dataset: %s", e)
-            logger.info("Falling back to empty RAG index")
-            return
-
-        # Build document list — keep entries with both question and answer
-        docs: list[dict[str, str]] = []
-        for row in ds:
-            q = (row.get("question") or "").strip()
-            a = (row.get("answer") or "").strip()
-            if q and a:
-                docs.append({
-                    "question": q,
-                    "answer": a,
-                    "source": row.get("source", "MedQuAD"),
-                })
-            if len(docs) >= MAX_DOCS:
-                break
-
-        if not docs:
-            logger.warning("No usable documents found in dataset")
-            return
-
-        logger.info("Embedding %d documents with %s...", len(docs), EMBED_MODEL)
-        texts = [f"{d['question']} {d['answer'][:300]}" for d in docs]
-        embeddings = self._embed(texts)   # (N, dim)
-
-        dim = embeddings.shape[1]
-        index = faiss.IndexFlatIP(dim)   # inner-product = cosine on L2-normalised vecs
-        faiss.normalize_L2(embeddings)
-        index.add(embeddings)
-
-        # Persist
-        faiss.write_index(index, str(_INDEX_PATH))
-        with open(_DOCS_PATH, "wb") as f:
-            pickle.dump(docs, f)
-
-        self._index = index
-        self._docs = docs
-        logger.info("FAISS index built and saved (%d vectors, dim=%d)", len(docs), dim)
-
-    # ------------------------------------------------------------------
-    # Embedding helper
-    # ------------------------------------------------------------------
-
-    def _embed(self, texts: list[str]) -> np.ndarray:
-        """Return L2-normalised sentence embeddings as float32 numpy array."""
-        if self._embedder is None:
-            from sentence_transformers import SentenceTransformer
-            self._embedder = SentenceTransformer(EMBED_MODEL)
-            logger.info("Loaded sentence-transformer: %s", EMBED_MODEL)
-
-        vecs = self._embedder.encode(
-            texts,
-            batch_size=64,
-            normalize_embeddings=True,
-            show_progress_bar=len(texts) > 200,
-            convert_to_numpy=True,
-        )
-        return vecs.astype(np.float32)
+        vec = self.model.encode([text], normalize_embeddings=True)
+        vec = np.array(vec, dtype="float32")
+        _, indices = self.index.search(vec, top_k)
+        return [self.docs[i] for i in indices[0] if i < len(self.docs)]
 
 
-# ---------------------------------------------------------------------------
 # Singleton
-# ---------------------------------------------------------------------------
-
-_rag_instance: MedicalRAGPipeline | None = None
+_retriever: MedicalRetriever | None = None
 
 
-def get_rag_pipeline() -> MedicalRAGPipeline:
-    global _rag_instance
-    if _rag_instance is None:
-        _rag_instance = MedicalRAGPipeline()
-    return _rag_instance
+def get_retriever() -> MedicalRetriever:
+    global _retriever
+    if _retriever is None:
+        _retriever = MedicalRetriever()
+    return _retriever
