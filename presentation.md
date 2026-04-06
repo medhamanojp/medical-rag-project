@@ -177,27 +177,35 @@ always                       → clinical disclaimer appended
 
 Agents don't just use Claude's built-in knowledge — they look things up.
 
-**Knowledge base**: MedQuAD (~16,000 medical Q&A pairs from NIH/NLM)
+**Two knowledge bases combined:**
+
+| Source | Content | Size |
+|--------|---------|------|
+| MedQuAD | NIH/NLM medical Q&A | ~16,000 pairs |
+| PubMedQA | Research Q&A from PubMed abstracts | ~1,000 pairs |
+
+**Medical embedding model: `neuml/pubmedbert-base-embeddings`**
+- Based on PubMedBERT — pretrained on **14 million PubMed abstracts**
+- Understands clinical synonyms: "dyspnea" = "shortness of breath"
+- General models (e.g. MiniLM) miss these — medical models don't
 
 ```
-Agent asks: "what causes migraines"
+Agent asks: "what causes chest pain and shortness of breath"
       │
       ▼
-SentenceTransformer encodes the query → vector
+PubMedBERT encodes query → medical-aware vector
       │
       ▼
-FAISS searches .rag_cache/faiss.index → finds top-3 most similar Q&A pairs
+FAISS searches combined MedQuAD + PubMedQA index
       │
       ▼
-Returns real NIH answers to the agent as context
+Returns top-3 clinically relevant Q&A pairs
       │
       ▼
-Agent uses this to ground its response in real medical literature
+Agent cites real NIH/PubMed content in its report
 ```
 
-**Why this matters**: Reduces hallucination. Agent says things backed by NIH, not invented.
-
-**Performance**: Index is built once (~1 min), then cached. Every subsequent query takes milliseconds.
+**Performance**: Index built once on first run (~3-5 min), then cached forever.
 
 ---
 
@@ -238,9 +246,9 @@ In Streamlit:
 | Explainability | SHAP TreeExplainer | Exact feature attribution |
 | Agent Framework | CrewAI | Sequential multi-agent orchestration |
 | LLM | Claude Sonnet 4.6 (Anthropic) | Powers all 3 agents |
-| RAG Embeddings | sentence-transformers (MiniLM-L6-v2) | Semantic search |
-| Vector Store | FAISS | Fast similarity search over MedQuAD |
-| Knowledge Base | MedQuAD (NIH/NLM) | 16k real medical Q&A pairs |
+| RAG Embeddings | PubMedBERT (`neuml/pubmedbert-base-embeddings`) | Medical-aware semantic search |
+| Vector Store | FAISS | Fast similarity search |
+| Knowledge Base | MedQuAD + PubMedQA | NIH Q&A + PubMed research Q&A |
 | Data Validation | Pydantic v2 | Input/output guardrails |
 | Web UI | Streamlit | Browser interface |
 | Config | python-dotenv | API key from .env file |

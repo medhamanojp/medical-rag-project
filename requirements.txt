@@ -21,7 +21,7 @@ huggingface-hub>=0.24.0
 pydantic>=2.9.0
 
 # RAG pipeline
-sentence-transformers>=3.1.0
+sentence-transformers>=3.1.0  # also loads neuml/pubmedbert-base-embeddings
 faiss-cpu>=1.8.0
 
 # Streamlit UI

@@ -80,10 +80,15 @@ Patient Symptoms
 
 ### RAG Pipeline
 
-- **Knowledge base**: MedQuAD — ~16,000 medical Q&A pairs from NIH/NLM
-- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2`
+- **Knowledge bases (combined)**:
+  - MedQuAD — ~16,000 Q&A pairs from NIH/NLM
+  - PubMedQA — ~1,000 research-backed clinical Q&A from PubMed abstracts
+- **Embedding model**: `neuml/pubmedbert-base-embeddings`
+  - Based on PubMedBERT (Microsoft), pretrained on 14M+ PubMed abstracts
+  - Understands clinical synonyms and medical terminology far better than general models
 - **Vector store**: FAISS (IndexFlatIP, cosine similarity)
 - **Cache**: Built once, stored in `.rag_cache/`, reused on all subsequent runs
+- Rebuild cache by deleting `.rag_cache/` and restarting
 
 ---
 
