@@ -125,8 +125,10 @@ streamlit run app.py
 ```python
 from src.crew import run_pipeline
 
+# Symptom names come from the trained model — run train_and_save() first
+# to discover available symptoms, or check clf.feature_names after loading
 result = run_pipeline(
-    symptoms={"headache": 1, "nausea": 1, "sensitivity_to_light": 1},
+    symptoms={"headache": 1, "nausea": 1, "vomiting": 1},
     age=34,
     api_key="sk-ant-...",
 )
@@ -142,6 +144,7 @@ print(result["report"])
 medical-rag-project/
 ├── app.py                          # Streamlit web UI
 ├── requirements.txt
+├── .env.example                    # API key template
 │
 ├── src/
 │   ├── crew.py                     # Pipeline orchestration
@@ -155,13 +158,14 @@ medical-rag-project/
 │   │   ├── safety_tool.py          # SafetyCheckTool
 │   │   └── rag_tool.py             # MedicalRAGTool
 │   ├── models/
-│   │   └── disease_classifier.py  # RandomForest + SHAP
+│   │   └── disease_classifier.py  # RandomForest + SHAP (trained on first run)
 │   ├── guardrails/
 │   │   └── medical_guardrails.py  # Input + output guardrails
 │   └── rag/
 │       └── rag_pipeline.py        # FAISS + MedQuAD indexing
 │
-└── data/                          # Sample patient files
+├── data/                          # Place custom symptom JSON files here
+└── tests/                         # Tests (to be added)
 ```
 
 ---
