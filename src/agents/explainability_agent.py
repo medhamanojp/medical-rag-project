@@ -5,6 +5,7 @@ Translates raw SHAP values into a human-readable clinical narrative.
 
 from crewai import Agent
 from src.tools.shap_tool import SHAPExplainerTool
+from src.tools.rag_tool import MedicalRAGTool
 
 
 def build_explainer_agent(llm) -> Agent:
@@ -24,7 +25,7 @@ def build_explainer_agent(llm) -> Agent:
             "ruled things out, and what the model was most uncertain about. "
             "You never use jargon without explanation."
         ),
-        tools=[SHAPExplainerTool()],
+        tools=[SHAPExplainerTool(), MedicalRAGTool()],
         llm=llm,
         verbose=True,
         allow_delegation=False,

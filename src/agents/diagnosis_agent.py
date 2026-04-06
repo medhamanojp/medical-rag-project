@@ -5,6 +5,7 @@ Runs the ML classifier and produces a differential diagnosis.
 
 from crewai import Agent
 from src.tools.prediction_tool import DiagnosisTool
+from src.tools.rag_tool import MedicalRAGTool
 
 
 def build_diagnosis_agent(llm) -> Agent:
@@ -13,7 +14,8 @@ def build_diagnosis_agent(llm) -> Agent:
         goal=(
             "Analyse the patient's reported symptoms and produce a clear "
             "differential diagnosis with the top-3 most likely diseases "
-            "and their probabilities."
+            "and their probabilities. Use the MedicalRAGTool to look up "
+            "supporting evidence from medical literature."
         ),
         backstory=(
             "You are an experienced general practitioner with 20 years of "
@@ -22,7 +24,7 @@ def build_diagnosis_agent(llm) -> Agent:
             "diagnosis. You are thorough, precise, and always prioritise "
             "patient safety over speed."
         ),
-        tools=[DiagnosisTool()],
+        tools=[DiagnosisTool(), MedicalRAGTool()],
         llm=llm,
         verbose=True,
         allow_delegation=False,
